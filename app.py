@@ -5,6 +5,7 @@ import queue
 import os
 import requests
 from dotenv import load_dotenv
+from streamlit.runtime.scriptrunner import add_script_run_ctx   # ← ЭТО КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, OrderType
@@ -14,13 +15,18 @@ load_dotenv()
 
 st.set_page_config(page_title="Polymarket MM Bot", layout="wide")
 
-st.title("🚀 Polymarket Market-Making Bot")
-st.markdown("**Реальная торговля 2026 • Только Polymarket API • Работает 24/7**")
+# === ИНИЦИАЛИЗАЦИЯ SESSION_STATE СРАЗУ В НАЧАЛЕ ===
+if "running" not in st.session_state:
+    st.session_state.running = False
+if "log_queue" not in st.session_state:
+    st.session_state.log_queue = queue.Queue(maxsize=200)
 
-# === КЛЮЧИ ===
+st.title("🚀 Polymarket Market-Making Bot")
+st.markdown("**Реальная торговля • Работает 24/7 в облаке**")
+
 PRIVATE_KEY = os.getenv("PRIVATE_KEY")
 if not PRIVATE_KEY:
-    st.error("❌ Добавь PRIVATE_KEY в Variables на Railway!")
+    st.error("❌ PRIVATE_KEY не найден! Добавь его в Variables на Railway")
     st.stop()
 
 HOST = "https://clob.polymarket.com"
@@ -35,40 +41,33 @@ def get_client():
 
 client = get_client()
 
-# === SESSION ===
-if "running" not in st.session_state:
-    st.session_state.running = False
-if "log_queue" not in st.session_state:
-    st.session_state.log_queue = queue.Queue(maxsize=200)
-
 def log(text):
     st.session_state.log_queue.put(f"[{time.strftime('%H:%M:%S')}] {text}")
 
 def bot_loop(order_size, spread_bps, refresh_sec, max_markets):
-    while st.session_state.running:
+    while st.session_state.running:          # теперь будет работать
         try:
             client.cancel_all()
             log("✅ Все ордера отменены")
 
-            # Топ рынки
             params = {"active": "true", "closed": "false", "order": "volume_24hr", "ascending": "false", "limit": str(max_markets*2)}
-            markets = requests.get(f"{GAMMA_URL}/events", params=params).json()
+            events = requests.get(f"{GAMMA_URL}/events", params=params).json()
 
-            active = []
-            for e in markets:
+            markets = []
+            for e in events:
                 for m in e.get("markets", []):
                     if len(m.get("clobTokenIds", [])) == 2:
-                        active.append({
+                        markets.append({
                             "condition_id": m["conditionId"],
                             "token_yes": m["clobTokenIds"][0],
                             "slug": m.get("slug", "Unknown"),
                             "volume": m.get("volume_24hr", 0)
                         })
 
-            active = sorted(active, key=lambda x: x["volume"], reverse=True)[:max_markets]
-            log(f"📊 Найдено {len(active)} рынков для MM")
+            markets = sorted(markets, key=lambda x: x["volume"], reverse=True)[:max_markets]
+            log(f"📊 Найдено {len(markets)} рынков")
 
-            for m in active:
+            for m in markets:
                 mid = client.get_midpoint(m["token_yes"])
                 spread = spread_bps / 10000.0
                 p_buy = max(0.01, round(mid - spread/2, 4))
@@ -84,7 +83,7 @@ def bot_loop(order_size, spread_bps, refresh_sec, max_markets):
                         resp = client.create_and_post_order(order, {"tick_size": tick, "neg_risk": neg})
                         log(f"✅ {'BUY' if side==BUY else 'SELL'} {m['slug'][:25]} @ {price}")
                     except Exception as e:
-                        log(f"⚠️ {str(e)[:80]}")
+                        log(f"⚠️ {str(e)[:70]}")
 
             log(f"⏳ Следующий цикл через {refresh_sec} сек...")
             time.sleep(refresh_sec)
@@ -92,6 +91,8 @@ def bot_loop(order_size, spread_bps, refresh_sec, max_markets):
         except Exception as e:
             log(f"❌ Ошибка: {e}")
             time.sleep(5)
+
+    log("🛑 Бот остановлен")
 
 # === UI ===
 with st.sidebar:
@@ -105,12 +106,13 @@ with st.sidebar:
     if col1.button("▶ Запустить бота", type="primary", use_container_width=True):
         if not st.session_state.running:
             st.session_state.running = True
-            threading.Thread(target=bot_loop, args=(order_size, spread_bps, refresh_sec, max_markets), daemon=True).start()
-            log("🚀 Бот запущен в облаке!")
+            thread = threading.Thread(target=bot_loop, args=(order_size, spread_bps, refresh_sec, max_markets), daemon=True)
+            add_script_run_ctx(thread)          # ← ИСПРАВЛЕНИЕ
+            thread.start()
+            log("🚀 Бот запущен!")
 
     if col2.button("⏹ Остановить", type="secondary", use_container_width=True):
         st.session_state.running = False
-        log("🛑 Бот остановлен")
         try:
             client.cancel_all()
         except:
@@ -118,13 +120,13 @@ with st.sidebar:
 
 st.subheader("Статус: " + ("🟢 **РАБОТАЕТ**" if st.session_state.running else "🔴 Остановлен"))
 
-# Логи
+# Автообновление логов
 log_area = st.empty()
 while True:
     logs = []
     while not st.session_state.log_queue.empty():
         logs.append(st.session_state.log_queue.get())
     if logs:
-        log_area.code("\n".join(logs[-80:]), language=None)
+        log_area.code("\n".join(logs[-100:]), language=None)
     time.sleep(0.5)
     st.rerun()
