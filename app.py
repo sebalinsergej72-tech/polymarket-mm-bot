@@ -5,7 +5,6 @@ import queue
 import os
 import requests
 from dotenv import load_dotenv
-from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, OrderType
@@ -15,7 +14,6 @@ load_dotenv()
 
 st.set_page_config(page_title="Polymarket MM Bot", layout="wide")
 
-# Инициализация session_state СРАЗУ в самом начале
 if "running" not in st.session_state:
     st.session_state.running = False
 if "log_queue" not in st.session_state:
@@ -51,46 +49,58 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
             client.cancel_all()
             log("✅ Все ордера отменены")
 
-            params = {"active": "true", "closed": "false", "order": "volume_24hr", "ascending": "false", "limit": str(max_markets * 2)}
-            events = requests.get(f"{GAMMA_URL}/events", params=params, timeout=15).json()
+            # Используем более стабильный endpoint /markets
+            r = requests.get(f"{GAMMA_URL}/markets", params={
+                "active": "true",
+                "closed": "false",
+                "order": "volume_24hr",
+                "ascending": "false",
+                "limit": str(max_markets * 6)
+            }, timeout=15)
+
+            if r.status_code != 200:
+                log(f"❌ API вернул ошибку {r.status_code}: {r.text[:200]}")
+                time.sleep(5)
+                continue
+
+            markets_data = r.json()
 
             markets = []
-            for e in events:
-                for m in e.get("markets", []):
-                    if len(m.get("clobTokenIds", [])) == 2:
-                        markets.append({
-                            "condition_id": m["conditionId"],
-                            "token_yes": m["clobTokenIds"][0],
-                            "slug": m.get("slug", "Unknown")[:35],
-                            "volume": m.get("volume_24hr", 0)
-                        })
+            for m in markets_data:
+                if isinstance(m, dict) and m.get("clobTokenIds") and len(m.get("clobTokenIds", [])) == 2:
+                    markets.append({
+                        "condition_id": m["conditionId"],
+                        "token_yes": m["clobTokenIds"][0],
+                        "slug": m.get("slug", "Unknown")[:40],
+                        "volume": m.get("volume_24hr", 0)
+                    })
 
             markets = sorted(markets, key=lambda x: x["volume"], reverse=True)[:max_markets]
-            log(f"📊 Найдено {len(markets)} рынков")
+            log(f"📊 Найдено {len(markets)} рынков для MM")
 
             for m in markets:
-                mid = client.get_midpoint(m["token_yes"])
-                spread = spread_bps / 10000.0
-                p_buy = max(0.01, round(mid - spread/2, 4))
-                p_sell = min(0.99, round(mid + spread/2, 4))
+                try:
+                    mid = client.get_midpoint(m["token_yes"])
+                    spread = spread_bps / 10000.0
+                    p_buy = max(0.01, round(mid - spread/2, 4))
+                    p_sell = min(0.99, round(mid + spread/2, 4))
 
-                info = requests.get(f"{GAMMA_URL}/markets/{m['condition_id']}", timeout=10).json()
-                tick = str(info.get("minimumTickSize", "0.01"))
-                neg = info.get("negRisk", False)
+                    info = requests.get(f"{GAMMA_URL}/markets/{m['condition_id']}", timeout=10).json()
+                    tick = str(info.get("minimumTickSize", "0.01"))
+                    neg = info.get("negRisk", False)
 
-                for side, price in [(BUY, p_buy), (SELL, p_sell)]:
-                    order = OrderArgs(token_id=m["token_yes"], price=price, size=order_size, side=side, order_type=OrderType.GTC)
-                    try:
+                    for side, price in [(BUY, p_buy), (SELL, p_sell)]:
+                        order = OrderArgs(token_id=m["token_yes"], price=price, size=order_size, side=side, order_type=OrderType.GTC)
                         client.create_and_post_order(order, {"tick_size": tick, "neg_risk": neg})
                         log(f"✅ {'BUY' if side == BUY else 'SELL'} {m['slug']} @ {price}")
-                    except Exception as e:
-                        log(f"⚠️ {str(e)[:70]}")
+                except Exception as e:
+                    log(f"⚠️ Ошибка на рынке {m['slug']}: {str(e)[:70]}")
 
             log(f"⏳ Следующий цикл через {refresh_sec} сек...")
             time.sleep(refresh_sec)
 
         except Exception as e:
-            log(f"❌ Ошибка: {e}")
+            log(f"❌ Критическая ошибка: {e}")
             time.sleep(5)
 
     log("🛑 Бот остановлен")
@@ -107,12 +117,7 @@ with st.sidebar:
     if col1.button("▶ Запустить бота", type="primary", use_container_width=True):
         if not st.session_state.running:
             st.session_state.running = True
-            thread = threading.Thread(
-                target=bot_loop,
-                args=(order_size, spread_bps, refresh_sec, max_markets),
-                daemon=True
-            )
-            add_script_run_ctx(thread)
+            thread = threading.Thread(target=bot_loop, args=(order_size, spread_bps, refresh_sec, max_markets), daemon=True)
             thread.start()
 
     if col2.button("⏹ Остановить", type="secondary", use_container_width=True):
