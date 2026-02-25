@@ -14,11 +14,6 @@ load_dotenv()
 
 st.set_page_config(page_title="Polymarket MM Bot", layout="wide")
 
-if "running" not in st.session_state:
-    st.session_state.running = False
-if "log_queue" not in st.session_state:
-    st.session_state.log_queue = queue.Queue(maxsize=300)
-
 st.title("🚀 Polymarket Market-Making Bot")
 st.markdown("**Реальная торговля • 24/7 • Polymarket API**")
 
@@ -39,17 +34,22 @@ def get_client():
 
 client = get_client()
 
+# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (работают надёжно в потоках)
+bot_running = False
+log_queue: queue.Queue = queue.Queue(maxsize=300)
+
 def log(text: str):
-    st.session_state.log_queue.put(f"[{time.strftime('%H:%M:%S')}] {text}")
+    log_queue.put(f"[{time.strftime('%H:%M:%S')}] {text}")
 
 def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: int):
+    global bot_running
     log("🚀 Бот запущен в облаке!")
-    while st.session_state.running:
+    while bot_running:
         try:
             client.cancel_all()
             log("✅ Все ордера отменены")
 
-            # Используем более стабильный endpoint /markets
+            # Надёжный запрос рынков
             r = requests.get(f"{GAMMA_URL}/markets", params={
                 "active": "true",
                 "closed": "false",
@@ -58,12 +58,7 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
                 "limit": str(max_markets * 6)
             }, timeout=15)
 
-            if r.status_code != 200:
-                log(f"❌ API вернул ошибку {r.status_code}: {r.text[:200]}")
-                time.sleep(5)
-                continue
-
-            markets_data = r.json()
+            markets_data = r.json() if r.ok else []
 
             markets = []
             for m in markets_data:
@@ -105,7 +100,7 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
 
     log("🛑 Бот остановлен")
 
-# ================== UI ==================
+# ================== ИНТЕРФЕЙС ==================
 with st.sidebar:
     st.header("⚙️ Настройки")
     order_size = st.slider("Размер ордера (USDC)", 10, 500, 50, 5)
@@ -115,27 +110,29 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     if col1.button("▶ Запустить бота", type="primary", use_container_width=True):
-        if not st.session_state.running:
-            st.session_state.running = True
+        global bot_running
+        if not bot_running:
+            bot_running = True
             thread = threading.Thread(target=bot_loop, args=(order_size, spread_bps, refresh_sec, max_markets), daemon=True)
             thread.start()
 
     if col2.button("⏹ Остановить", type="secondary", use_container_width=True):
-        st.session_state.running = False
+        global bot_running
+        bot_running = False
         try:
             client.cancel_all()
         except:
             pass
 
-st.subheader("Статус: " + ("🟢 **БОТ РАБОТАЕТ**" if st.session_state.running else "🔴 Остановлен"))
+st.subheader("Статус: " + ("🟢 **БОТ РАБОТАЕТ**" if bot_running else "🔴 Остановлен"))
 
 # Логи
 log_area = st.empty()
 while True:
     logs = []
-    while not st.session_state.log_queue.empty():
-        logs.append(st.session_state.log_queue.get())
+    while not log_queue.empty():
+        logs.append(log_queue.get())
     if logs:
         log_area.code("\n".join(logs[-150:]), language=None)
-    time.sleep(0.5)
+    time.sleep(0.4)
     st.rerun()
