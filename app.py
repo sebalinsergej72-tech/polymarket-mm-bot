@@ -5,7 +5,6 @@ import queue
 import os
 import requests
 from dotenv import load_dotenv
-from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, OrderType
@@ -13,7 +12,6 @@ from py_clob_client.order_builder.constants import BUY, SELL
 
 load_dotenv()
 
-# ================== ИНИЦИАЛИЗАЦИЯ ==================
 st.set_page_config(page_title="Polymarket MM Bot", layout="wide")
 
 if "running" not in st.session_state:
@@ -26,7 +24,7 @@ st.markdown("**Реальная торговля • 24/7 • Polymarket API**")
 
 PRIVATE_KEY = os.getenv("PRIVATE_KEY")
 if not PRIVATE_KEY:
-    st.error("❌ PRIVATE_KEY не найден! Добавь его в Variables → Redeploy")
+    st.error("❌ PRIVATE_KEY не найден!")
     st.stop()
 
 HOST = "https://clob.polymarket.com"
@@ -51,28 +49,36 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
             client.cancel_all()
             log("✅ Все ордера отменены")
 
-            r = requests.get(f"{GAMMA_URL}/markets", params={
+            # ←←← ИСПРАВЛЕНИЕ: используем /events (самый стабильный способ)
+            r = requests.get(f"{GAMMA_URL}/events", params={
                 "active": "true",
                 "closed": "false",
                 "order": "volume_24hr",
                 "ascending": "false",
-                "limit": str(max_markets * 6)
+                "limit": "50"
             }, timeout=15)
 
-            markets_data = r.json() if r.ok else []
+            data = r.json() if r.ok else []
+            log(f"📥 Получено {len(data)} событий с Gamma API")
 
             markets = []
-            for m in markets_data:
-                if isinstance(m, dict) and m.get("clobTokenIds") and len(m.get("clobTokenIds", [])) == 2:
-                    markets.append({
-                        "condition_id": m["conditionId"],
-                        "token_yes": m["clobTokenIds"][0],
-                        "slug": m.get("slug", "Unknown")[:40],
-                        "volume": m.get("volume_24hr", 0)
-                    })
+            for event in data:
+                for m in event.get("markets", []):
+                    if m.get("clobTokenIds") and len(m["clobTokenIds"]) == 2:   # только бинарные рынки
+                        markets.append({
+                            "condition_id": m["conditionId"],
+                            "token_yes": m["clobTokenIds"][0],
+                            "slug": m.get("slug", "Unknown")[:40],
+                            "volume": m.get("volume_24hr", 0)
+                        })
 
             markets = sorted(markets, key=lambda x: x["volume"], reverse=True)[:max_markets]
-            log(f"📊 Найдено {len(markets)} рынков")
+            log(f"📊 Найдено {len(markets)} активных бинарных рынков")
+
+            if len(markets) == 0:
+                log("⚠️ Нет доступных рынков. Возможно временная проблема API.")
+                time.sleep(refresh_sec)
+                continue
 
             for m in markets:
                 try:
@@ -90,7 +96,7 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
                         client.create_and_post_order(order, {"tick_size": tick, "neg_risk": neg})
                         log(f"✅ {'BUY' if side == BUY else 'SELL'} {m['slug']} @ {price}")
                 except Exception as e:
-                    log(f"⚠️ Ошибка на рынке {m['slug']}: {str(e)[:70]}")
+                    log(f"⚠️ Ошибка рынка {m['slug']}: {str(e)[:60]}")
 
             log(f"⏳ Следующий цикл через {refresh_sec} сек...")
             time.sleep(refresh_sec)
@@ -113,12 +119,7 @@ with st.sidebar:
     if col1.button("▶ Запустить бота", type="primary", use_container_width=True):
         if not st.session_state.running:
             st.session_state.running = True
-            thread = threading.Thread(
-                target=bot_loop,
-                args=(order_size, spread_bps, refresh_sec, max_markets),
-                daemon=True
-            )
-            add_script_run_ctx(thread)
+            thread = threading.Thread(target=bot_loop, args=(order_size, spread_bps, refresh_sec, max_markets), daemon=True)
             thread.start()
 
     if col2.button("⏹ Остановить", type="secondary", use_container_width=True):
@@ -130,7 +131,6 @@ with st.sidebar:
 
 st.subheader("Статус: " + ("🟢 **БОТ РАБОТАЕТ**" if st.session_state.running else "🔴 Остановлен"))
 
-# ================== ЛОГИ ==================
 log_area = st.empty()
 while True:
     logs = []
