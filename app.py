@@ -5,6 +5,7 @@ import queue
 import os
 import requests
 from dotenv import load_dotenv
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, OrderType
@@ -12,7 +13,13 @@ from py_clob_client.order_builder.constants import BUY, SELL
 
 load_dotenv()
 
+# ================== ИНИЦИАЛИЗАЦИЯ ==================
 st.set_page_config(page_title="Polymarket MM Bot", layout="wide")
+
+if "running" not in st.session_state:
+    st.session_state.running = False
+if "log_queue" not in st.session_state:
+    st.session_state.log_queue = queue.Queue(maxsize=300)
 
 st.title("🚀 Polymarket Market-Making Bot")
 st.markdown("**Реальная торговля • 24/7 • Polymarket API**")
@@ -34,18 +41,12 @@ def get_client():
 
 client = get_client()
 
-# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (объявляем ПЕРЕД функциями!)
-bot_running = False
-log_queue: queue.Queue = queue.Queue(maxsize=300)
-
 def log(text: str):
-    log_queue.put(f"[{time.strftime('%H:%M:%S')}] {text}")
+    st.session_state.log_queue.put(f"[{time.strftime('%H:%M:%S')}] {text}")
 
 def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: int):
-    global bot_running
     log("🚀 Бот запущен в облаке!")
-
-    while bot_running:
+    while st.session_state.running:
         try:
             client.cancel_all()
             log("✅ Все ордера отменены")
@@ -100,38 +101,41 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
 
     log("🛑 Бот остановлен")
 
-# ================== ИНТЕРФЕЙС ==================
+# ================== UI ==================
 with st.sidebar:
     st.header("⚙️ Настройки")
-    order_size = st.slider("Размер ордера (USDC)", 10, 500, 10, 1)   # по умолчанию 10 для теста
-    spread_bps = st.slider("Спред (bps)", 5, 60, 20, 1)
+    order_size = st.slider("Размер ордера (USDC)", 5, 100, 10, 1)
+    spread_bps = st.slider("Спред (bps)", 10, 40, 20, 1)
     refresh_sec = st.slider("Интервал (сек)", 5, 30, 8, 1)
-    max_markets = st.slider("Макс. рынков", 1, 12, 3, 1)            # по умолчанию 3
+    max_markets = st.slider("Макс. рынков", 1, 8, 3, 1)
 
     col1, col2 = st.columns(2)
     if col1.button("▶ Запустить бота", type="primary", use_container_width=True):
-        global bot_running
-        if not bot_running:
-            bot_running = True
-            thread = threading.Thread(target=bot_loop, args=(order_size, spread_bps, refresh_sec, max_markets), daemon=True)
+        if not st.session_state.running:
+            st.session_state.running = True
+            thread = threading.Thread(
+                target=bot_loop,
+                args=(order_size, spread_bps, refresh_sec, max_markets),
+                daemon=True
+            )
+            add_script_run_ctx(thread)
             thread.start()
 
     if col2.button("⏹ Остановить", type="secondary", use_container_width=True):
-        global bot_running
-        bot_running = False
+        st.session_state.running = False
         try:
             client.cancel_all()
         except:
             pass
 
-st.subheader("Статус: " + ("🟢 **БОТ РАБОТАЕТ**" if bot_running else "🔴 Остановлен"))
+st.subheader("Статус: " + ("🟢 **БОТ РАБОТАЕТ**" if st.session_state.running else "🔴 Остановлен"))
 
-# Логи
+# ================== ЛОГИ ==================
 log_area = st.empty()
 while True:
     logs = []
-    while not log_queue.empty():
-        logs.append(log_queue.get())
+    while not st.session_state.log_queue.empty():
+        logs.append(st.session_state.log_queue.get())
     if logs:
         log_area.code("\n".join(logs[-150:]), language=None)
     time.sleep(0.4)
