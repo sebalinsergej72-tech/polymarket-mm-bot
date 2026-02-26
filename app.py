@@ -34,7 +34,7 @@ def get_client():
 
 client = get_client()
 
-# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (работают надёжно в потоках)
+# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (объявляем ПЕРЕД функциями!)
 bot_running = False
 log_queue: queue.Queue = queue.Queue(maxsize=300)
 
@@ -44,12 +44,12 @@ def log(text: str):
 def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: int):
     global bot_running
     log("🚀 Бот запущен в облаке!")
+
     while bot_running:
         try:
             client.cancel_all()
             log("✅ Все ордера отменены")
 
-            # Надёжный запрос рынков
             r = requests.get(f"{GAMMA_URL}/markets", params={
                 "active": "true",
                 "closed": "false",
@@ -71,7 +71,7 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
                     })
 
             markets = sorted(markets, key=lambda x: x["volume"], reverse=True)[:max_markets]
-            log(f"📊 Найдено {len(markets)} рынков для MM")
+            log(f"📊 Найдено {len(markets)} рынков")
 
             for m in markets:
                 try:
@@ -103,10 +103,10 @@ def bot_loop(order_size: float, spread_bps: int, refresh_sec: int, max_markets: 
 # ================== ИНТЕРФЕЙС ==================
 with st.sidebar:
     st.header("⚙️ Настройки")
-    order_size = st.slider("Размер ордера (USDC)", 10, 500, 50, 5)
-    spread_bps = st.slider("Спред (bps)", 5, 60, 15, 1)
+    order_size = st.slider("Размер ордера (USDC)", 10, 500, 10, 1)   # по умолчанию 10 для теста
+    spread_bps = st.slider("Спред (bps)", 5, 60, 20, 1)
     refresh_sec = st.slider("Интервал (сек)", 5, 30, 8, 1)
-    max_markets = st.slider("Макс. рынков", 1, 12, 5, 1)
+    max_markets = st.slider("Макс. рынков", 1, 12, 3, 1)            # по умолчанию 3
 
     col1, col2 = st.columns(2)
     if col1.button("▶ Запустить бота", type="primary", use_container_width=True):
