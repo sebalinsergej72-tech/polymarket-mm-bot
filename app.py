@@ -410,8 +410,8 @@ def bot_loop(
                         }
                     )
 
-            markets = sorted(markets, key=lambda x: x["volume"], reverse=True)[:max_markets]
-            push_log(log_queue, f"📊 Рынков в работе: {len(markets)}")
+            markets = sorted(markets, key=lambda x: x["volume"], reverse=True)
+            push_log(log_queue, f"📊 Кандидатов рынков: {len(markets)}")
 
             if not markets:
                 push_log(log_queue, "⚠️ Нет подходящих рынков по фильтрам")
@@ -432,8 +432,12 @@ def bot_loop(
                 stop_event.wait(refresh_sec)
                 continue
 
+            tradable_markets_count = 0
+            skipped_no_orderbook = 0
             for market in markets:
                 if stop_event.is_set():
+                    break
+                if tradable_markets_count >= max_markets:
                     break
                 cycle_limit_hit = False
 
@@ -454,12 +458,16 @@ def bot_loop(
 
                     if token_id is None:
                         skipped_invalid_price += 1
-                        push_log(
-                            log_queue,
-                            f"⚠️ Пропуск {market['slug']}: нет активной книги ордеров "
-                            f"({'; '.join(midpoint_errors)[:140]})",
-                        )
+                        skipped_no_orderbook += 1
+                        if skipped_no_orderbook <= 2:
+                            push_log(
+                                log_queue,
+                                f"⚠️ Пропуск {market['slug']}: нет активной книги ордеров "
+                                f"({'; '.join(midpoint_errors)[:140]})",
+                            )
                         continue
+
+                    tradable_markets_count += 1
 
                     if not (0.0 < mid < 1.0):
                         skipped_invalid_price += 1
@@ -576,12 +584,20 @@ def bot_loop(
                 if cycle_limit_hit:
                     break
 
+            if tradable_markets_count == 0:
+                push_log(log_queue, "⚠️ Не найдено рынков с активной книгой ордеров в текущем цикле")
+            else:
+                push_log(log_queue, f"✅ Рынков с активной книгой в работе: {tradable_markets_count}")
+            if skipped_no_orderbook > 2:
+                push_log(log_queue, f"⚠️ Пропущено рынков без книги: {skipped_no_orderbook}")
+
             push_metrics(
                 metrics_queue,
                 {
                     "last_cycle_ts": cycle_started,
                     "cycle_duration_sec": round(time.time() - cycle_started, 2),
                     "markets_seen": len(markets),
+                    "markets_tradable": tradable_markets_count,
                     "orders_posted": orders_posted,
                     "buy_orders_posted": buy_orders_posted,
                     "sell_orders_posted": sell_orders_posted,
@@ -592,6 +608,7 @@ def bot_loop(
                     "skipped_position_limit": skipped_position_limit,
                     "skipped_exposure_limit": skipped_exposure_limit,
                     "skipped_invalid_price": skipped_invalid_price,
+                    "skipped_no_orderbook": skipped_no_orderbook,
                     "last_error": last_error,
                     **positions_snapshot,
                 },
@@ -715,6 +732,7 @@ c10.metric("Cycle age (sec)", "-" if seconds_since_cycle is None else str(second
 
 st.caption(
     "Skip stats: "
+    f"no_orderbook={int(to_float(metrics.get('skipped_no_orderbook'), 0))}, "
     f"no_inventory={int(to_float(metrics.get('skipped_no_inventory'), 0))}, "
     f"balance={int(to_float(metrics.get('skipped_balance'), 0))}, "
     f"position_limit={int(to_float(metrics.get('skipped_position_limit'), 0))}, "
