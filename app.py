@@ -79,6 +79,16 @@ def to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def to_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return default
+
+
 PRIVATE_KEY = (os.getenv("PRIVATE_KEY") or "").strip()
 if not is_valid_private_key(PRIVATE_KEY):
     st.error("❌ PRIVATE_KEY отсутствует или имеет неверный формат. Ожидается 64 hex (с optional 0x).")
@@ -369,6 +379,16 @@ def bot_loop(
                     token_ids = parse_clob_token_ids(market.get("clobTokenIds"))
                     if len(token_ids) != 2:
                         continue
+                    if not to_bool(market.get("active"), True):
+                        continue
+                    if to_bool(market.get("closed"), False):
+                        continue
+                    if to_bool(market.get("archived"), False):
+                        continue
+                    if not to_bool(market.get("acceptingOrders"), False):
+                        continue
+                    if not to_bool(market.get("enableOrderBook"), True):
+                        continue
 
                     volume = to_float(
                         market.get("volume24hr", market.get("volume_24hr", market.get("volume"))),
@@ -384,7 +404,7 @@ def bot_loop(
                     markets.append(
                         {
                             "condition_id": condition_id,
-                            "token_yes": token_ids[0],
+                            "token_ids": token_ids,
                             "slug": (market.get("slug") or "Unknown")[:40],
                             "volume": volume,
                         }
@@ -418,7 +438,29 @@ def bot_loop(
                 cycle_limit_hit = False
 
                 try:
-                    mid = to_float(client.get_midpoint(market["token_yes"]), -1.0)
+                    token_id = None
+                    mid = -1.0
+                    midpoint_errors = []
+                    for candidate in market["token_ids"]:
+                        try:
+                            candidate_mid = to_float(client.get_midpoint(candidate), -1.0)
+                            if 0.0 < candidate_mid < 1.0:
+                                token_id = candidate
+                                mid = candidate_mid
+                                break
+                            midpoint_errors.append(f"{candidate}: midpoint={candidate_mid}")
+                        except Exception as exc:
+                            midpoint_errors.append(f"{candidate}: {str(exc)[:80]}")
+
+                    if token_id is None:
+                        skipped_invalid_price += 1
+                        push_log(
+                            log_queue,
+                            f"⚠️ Пропуск {market['slug']}: нет активной книги ордеров "
+                            f"({'; '.join(midpoint_errors)[:140]})",
+                        )
+                        continue
+
                     if not (0.0 < mid < 1.0):
                         skipped_invalid_price += 1
                         push_log(log_queue, f"⚠️ Пропуск {market['slug']}: midpoint вне диапазона ({mid})")
@@ -447,7 +489,6 @@ def bot_loop(
                         push_log(log_queue, f"⚠️ Пропуск {market['slug']}: невалидные цены")
                         continue
 
-                    token_id = market["token_yes"]
                     token_position = positions_by_asset.get(token_id, 0.0)
 
                     buy_size = float(order_size)
