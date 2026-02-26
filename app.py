@@ -642,19 +642,19 @@ if st.session_state.running and (thread is None or not thread.is_alive()):
 
 with st.sidebar:
     st.header("Настройки")
-    order_size = st.slider("Размер ордера (shares)", 1.0, 200.0, 10.0, 1.0)
-    spread_bps = st.slider("Спред (bps)", 10, 80, 20, 1)
-    refresh_sec = st.slider("Интервал цикла (сек)", 5, 90, 10, 1)
-    max_markets = st.slider("Макс. рынков", 1, 12, 4, 1)
+    order_size = st.slider("Размер ордера (shares)", 1.0, 50.0, 5.0, 1.0)
+    spread_bps = st.slider("Спред (bps)", 10, 100, 40, 1)
+    refresh_sec = st.slider("Интервал цикла (сек)", 5, 120, 20, 1)
+    max_markets = st.slider("Макс. рынков", 1, 8, 1, 1)
 
     st.divider()
     st.subheader("Risk")
-    max_cycle_notional = st.slider("Лимит notional на цикл (USDC)", 20, 2000, 250, 10)
-    max_portfolio_exposure = st.slider("Лимит экспозиции портфеля (USDC)", 50, 10000, 1000, 50)
-    max_token_position = st.slider("Лимит позиции на токен (shares)", 1.0, 1000.0, 150.0, 1.0)
+    max_cycle_notional = st.slider("Лимит notional на цикл (USDC)", 5, 500, 20, 1)
+    max_portfolio_exposure = st.slider("Лимит экспозиции портфеля (USDC)", 5, 1000, 20, 1)
+    max_token_position = st.slider("Лимит позиции на токен (shares)", 1.0, 200.0, 10.0, 1.0)
     sell_inventory_buffer = st.slider("Буфер для SELL (shares)", 0.0, 50.0, 1.0, 0.5)
-    collateral_utilization = st.slider("Использование collateral", 0.1, 1.0, 0.85, 0.05)
-    min_market_volume = st.slider("Мин. объем рынка 24h", 0, 500000, 10000, 1000)
+    collateral_utilization = st.slider("Использование collateral", 0.1, 1.0, 0.5, 0.05)
+    min_market_volume = st.slider("Мин. объем рынка 24h", 0, 500000, 0, 1000)
     enforce_sell_inventory = st.checkbox("Запрет SELL без доступного остатка", value=ENABLE_SELL_INVENTORY_GUARD)
 
     col1, col2 = st.columns(2)
