@@ -333,7 +333,7 @@ def bot_loop(
                 params={
                     "active": "true",
                     "closed": "false",
-                    "order": "volume_24hr",
+                    "order": "volume24hr",
                     "ascending": "false",
                     "limit": "80",
                 },
@@ -351,7 +351,10 @@ def bot_loop(
                     if len(token_ids) != 2:
                         continue
 
-                    volume = to_float(market.get("volume_24hr"), 0.0)
+                    volume = to_float(
+                        market.get("volume24hr", market.get("volume_24hr", market.get("volume"))),
+                        0.0,
+                    )
                     if volume < min_market_volume:
                         continue
 
