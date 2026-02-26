@@ -2,6 +2,7 @@ import math
 import os
 import queue
 import re
+import json
 import threading
 import time
 from collections import deque
@@ -212,6 +213,24 @@ def round_to_tick(price: float, tick: float, *, direction: str) -> float:
     return round(snapped, precision)
 
 
+def parse_clob_token_ids(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value if str(v)]
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(v) for v in parsed if str(v)]
+        except Exception:
+            return []
+
+    return []
+
+
 def get_balance_allowance(asset_type: Any, token_id: Optional[str] = None) -> Optional[Dict[str, float]]:
     try:
         params = BalanceAllowanceParams(
@@ -333,7 +352,7 @@ def bot_loop(
                 params={
                     "active": "true",
                     "closed": "false",
-                    "order": "volume_24hr",
+                    "order": "volume24hr",
                     "ascending": "false",
                     "limit": "80",
                 },
@@ -347,11 +366,14 @@ def bot_loop(
             markets = []
             for event in events:
                 for market in event.get("markets", []):
-                    token_ids = market.get("clobTokenIds") or []
+                    token_ids = parse_clob_token_ids(market.get("clobTokenIds"))
                     if len(token_ids) != 2:
                         continue
 
-                    volume = to_float(market.get("volume_24hr"), 0.0)
+                    volume = to_float(
+                        market.get("volume24hr", market.get("volume_24hr", market.get("volume"))),
+                        0.0,
+                    )
                     if volume < min_market_volume:
                         continue
 
